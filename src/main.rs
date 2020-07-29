@@ -1,6 +1,6 @@
 mod model;
 
-use std::mem;
+use std::{collections::VecDeque, mem};
 
 use eye::hal::traits::{Device, Stream};
 use eye::prelude::*;
@@ -8,7 +8,8 @@ use eye::prelude::*;
 use ffimage::packed::dynamic::ImageView as DynamicImageView;
 
 use iced::{
-    executor, futures, pick_list, Application, Column, Command, Element, PickList, Row, Settings,
+    executor, futures, pick_list, scrollable, Application, Column, Command, Element, Length,
+    PickList, Row, Scrollable, Settings, Text,
 };
 
 fn main() {
@@ -23,12 +24,19 @@ struct Eyece<'a> {
     devices: Vec<model::device::Info>,
     device_list: pick_list::State<model::device::Info>,
     device_selection: Option<model::device::Info>,
+
+    log: scrollable::State,
+    loglevel_list: pick_list::State<model::log::Level>,
+    loglevel_selection: model::log::Level,
+    log_buffer: VecDeque<(model::log::Level, String)>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     EnumerateDevices(Vec<model::device::Info>),
     DeviceSelected(model::device::Info),
+    LogLevelSelected(model::log::Level),
+    Log(model::log::Level, String),
 }
 
 impl<'a> Application for Eyece<'a> {
@@ -46,6 +54,7 @@ impl<'a> Application for Eyece<'a> {
 
         (
             Eyece {
+                loglevel_selection: model::log::Level::Warn,
                 ..Default::default()
             },
             Command::perform(futures::future::ready(devices), Message::EnumerateDevices),
@@ -60,6 +69,13 @@ impl<'a> Application for Eyece<'a> {
         match message {
             Message::EnumerateDevices(devices) => {
                 self.devices = devices;
+                self.update(Message::Log(
+                    model::log::Level::Info,
+                    format!(
+                        "Message::EnumerateDevices: Found {} device(s)",
+                        self.devices.len()
+                    ),
+                ));
             }
             Message::DeviceSelected(dev) => {
                 // update UI state
@@ -85,7 +101,26 @@ impl<'a> Application for Eyece<'a> {
                             self.device.as_mut().unwrap().stream().unwrap(),
                         ));
                     }
+
+                    self.update(Message::Log(
+                        model::log::Level::Info,
+                        format!("Message::DeviceSelected: Found suitable device (BGRA), resolution = {}x{}", format.width, format.height),
+                    ));
+                } else {
+                    self.update(Message::Log(
+                        model::log::Level::Warn,
+                        format!("Message::DeviceSelected: Device does not offer BGRA buffers"),
+                    ));
                 }
+            }
+            Message::LogLevelSelected(level) => {
+                self.loglevel_selection = level;
+            }
+            Message::Log(level, message) => {
+                if self.log_buffer.len() > 100 {
+                    self.log_buffer.pop_front();
+                }
+                self.log_buffer.push_back((level, message));
             }
         }
 
@@ -105,6 +140,35 @@ impl<'a> Application for Eyece<'a> {
             Message::DeviceSelected,
         ));
 
-        Column::new().padding(PADDING).push(config).into()
+        // Debug panel.
+        let debug = Row::new().push(PickList::new(
+            &mut self.loglevel_list,
+            &model::log::Level::ALL[..],
+            Some(self.loglevel_selection),
+            Message::LogLevelSelected,
+        ));
+
+        // Log messages.
+        let mut logs = Scrollable::new(&mut self.log)
+            .width(Length::Fill)
+            .height(Length::Units(100));
+
+        for entry in &self.log_buffer {
+            if entry.0 as u8 <= self.loglevel_selection as u8 {
+                logs = logs.push(
+                    Row::new()
+                        .spacing(SPACING)
+                        .push(Text::new(format!("[{}]", entry.0)))
+                        .push(Text::new(entry.1.clone())),
+                );
+            }
+        }
+
+        Column::new()
+            .padding(PADDING)
+            .push(config)
+            .push(debug)
+            .push(logs)
+            .into()
     }
 }
