@@ -1,15 +1,17 @@
 mod model;
 
+mod stream;
+
 use std::collections::VecDeque;
 
-use eye::hal::traits::{Device, Stream};
+use eye::hal::traits::Device;
 use eye::prelude::*;
 
-use ffimage::packed::dynamic::ImageView;
-
+use iced::widget::image;
 use iced::{
     button, executor, pick_list, scrollable, slider, Application, Button, Checkbox, Column,
-    Command, Element, Length, PickList, Row, Scrollable, Settings, Slider, Text,
+    Command, Element, Image, Length, PickList, Row, Scrollable, Settings, Slider, Subscription,
+    Text,
 };
 
 macro_rules! unwrap_or_return {
@@ -53,13 +55,15 @@ fn main() {
 }
 
 #[derive(Default)]
-struct Eyece<'a> {
+struct Eyece {
     device: Option<Box<dyn Device>>,
-    stream: Option<Box<dyn Stream<Item = ImageView<'a>>>>,
+    image: Option<image::Handle>,
 
     config: Config,
     controls: Controls,
     log: Log,
+
+    streaming: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -70,9 +74,11 @@ enum Message {
     ConfigMessage(ConfigMessage),
     ControlsMessage(ControlsMessage),
     LogMessage(LogMessage),
+    Stream(bool),
+    StreamEvent(stream::Event),
 }
 
-impl<'a> Application for Eyece<'a> {
+impl Application for Eyece {
     type Executor = executor::Default;
     type Message = Message;
     type Flags = ();
@@ -99,11 +105,25 @@ impl<'a> Application for Eyece<'a> {
         String::from("Eyece")
     }
 
+    fn subscription(&self) -> Subscription<Message> {
+        if !self.streaming {
+            return Subscription::none();
+        }
+
+        match &self.device {
+            Some(dev) => {
+                iced::Subscription::from_recipe(stream::ImageStream::new(dev.stream().unwrap()))
+                    .map(Message::StreamEvent)
+            }
+            _ => Subscription::none(),
+        }
+    }
+
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
             Message::DeviceSelected(dev) => {
                 // dispose of any existing streams
-                self.stream = None;
+                self.streaming = false;
                 self.device = None;
 
                 // open the device
@@ -209,15 +229,8 @@ impl<'a> Application for Eyece<'a> {
                     }
 
                     // create the buffer stream
-                    self.stream = Some(unwrap_or_return!(
-                        device.stream(),
-                        Command::none(),
-                        (|err| self.log.update(LogMessage::Log(
-                            model::log::Level::Warn,
-                            format!("Message::DeviceSelected: Failed to create stream ({})", err),
-                        )))
-                    ));
                     self.device = Some(device);
+                    self.update(Message::Stream(true));
 
                     // update UI state
                     self.config.device = Some(dev);
@@ -236,9 +249,9 @@ impl<'a> Application for Eyece<'a> {
             }
             Message::FormatSelected(fmt) => {
                 // we need to destroy the stream to apply new parameters
-                self.stream = None;
+                self.streaming = false;
 
-                // read the current format and set the resolution
+                // read the current forma    };t and set the resolution
                 let device = self.device.as_mut().unwrap();
                 let mut format = unwrap_or_return!(
                     device.format(),
@@ -260,14 +273,7 @@ impl<'a> Application for Eyece<'a> {
                 );
 
                 // recreate the stream with the new format
-                self.stream = Some(unwrap_or_return!(
-                    device.stream(),
-                    Command::none(),
-                    (|err| self.log.update(LogMessage::Log(
-                        model::log::Level::Warn,
-                        format!("Message::FormatSelected: Failed to create stream ({})", err),
-                    )))
-                ));
+                self.update(Message::Stream(true));
 
                 // update UI state
                 self.config.format = Some(fmt);
@@ -329,6 +335,13 @@ impl<'a> Application for Eyece<'a> {
             Message::LogMessage(msg) => {
                 self.log.update(msg);
             }
+            Message::Stream(enable) => {
+                self.streaming = enable;
+            }
+            Message::StreamEvent(event) => match event {
+                stream::Event::Advanced(handle) => self.image = Some(handle),
+                _ => {}
+            },
         }
 
         Command::none()
@@ -336,15 +349,23 @@ impl<'a> Application for Eyece<'a> {
 
     fn view(&mut self) -> Element<Message> {
         // Uniform padding and spacing for all elements.
+        const SPACING: u16 = 10;
         const PADDING: u16 = 10;
+
+        let mut image = Row::new();
+        if let Some(handle) = &self.image {
+            image = image.push(Image::new(handle.clone()));
+        }
 
         Column::new()
             .padding(PADDING)
             .push(self.config.view().map(|msg| Message::ConfigMessage(msg)))
             .push(
-                self.controls
-                    .view()
-                    .map(|msg| Message::ControlsMessage(msg)),
+                Row::new().spacing(SPACING).push(image).push(
+                    self.controls
+                        .view()
+                        .map(|msg| Message::ControlsMessage(msg)),
+                ),
             )
             .push(self.log.view().map(|msg| Message::LogMessage(msg)))
             .into()
