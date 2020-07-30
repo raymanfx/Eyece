@@ -8,3 +8,4 @@ edition = "2018"
 eye = { git = "https://github.com/raymanfx/eye-rs", rev = "da642adf" }
 ffimage = "^0.8"
 iced = { git = "https://github.com/hecrj/iced", features = ["image", "tokio"], rev = "51c22f24" }
+iced_futures = { git = "https://github.com/hecrj/iced", rev = "51c22f24" }
