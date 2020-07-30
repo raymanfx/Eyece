@@ -23,9 +23,13 @@ struct Eyece<'a> {
     stream: Option<Box<dyn Stream<Item = DynamicImageView<'a>>>>,
     device: Option<Box<dyn Device>>,
 
-    devices: Vec<model::device::Info>,
-    device_list: pick_list::State<model::device::Info>,
-    device_selection: Option<model::device::Info>,
+    devices: Vec<model::device::Node>,
+    device_list: pick_list::State<model::device::Node>,
+    device_selection: Option<model::device::Node>,
+
+    formats: Vec<model::device::Format>,
+    format_list: pick_list::State<model::device::Format>,
+    format_selection: Option<model::device::Format>,
 
     log: scrollable::State,
     loglevel_list: pick_list::State<model::log::Level>,
@@ -35,8 +39,9 @@ struct Eyece<'a> {
 
 #[derive(Debug, Clone)]
 enum Message {
-    EnumerateDevices(Vec<model::device::Info>),
-    DeviceSelected(model::device::Info),
+    EnumerateDevices(Vec<model::device::Node>),
+    DeviceSelected(model::device::Node),
+    FormatSelected(model::device::Format),
     LogLevelSelected(model::log::Level),
     Log(model::log::Level, String),
 }
@@ -49,9 +54,9 @@ impl<'a> Application for Eyece<'a> {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         // Perform initial device enumeration.
         // TODO: Async?
-        let devices: Vec<model::device::Info> = DeviceList::enumerate()
+        let devices: Vec<model::device::Node> = DeviceList::enumerate()
             .iter()
-            .map(|dev| model::device::Info::from(dev))
+            .map(|dev| model::device::Node::from(dev))
             .collect();
 
         (
@@ -97,6 +102,19 @@ impl<'a> Application for Eyece<'a> {
                 format.pixfmt = PixelFormat::Bgra(32);
                 format = device.set_format(&format).unwrap();
                 if format.pixfmt == PixelFormat::Bgra(32) {
+                    // enumerate formats
+                    self.formats = Vec::new();
+                    for info in device.query_formats().unwrap() {
+                        if info.pixfmt == format.pixfmt {
+                            for res in info.resolutions {
+                                self.formats.push(model::device::Format {
+                                    width: res.0,
+                                    height: res.1,
+                                });
+                            }
+                        }
+                    }
+
                     self.device = Some(device);
                     unsafe {
                         self.stream = Some(mem::transmute(
@@ -113,6 +131,29 @@ impl<'a> Application for Eyece<'a> {
                         model::log::Level::Warn,
                         format!("Message::DeviceSelected: Device does not offer BGRA buffers"),
                     ));
+                }
+            }
+            Message::FormatSelected(fmt) => {
+                self.format_selection = Some(fmt);
+
+                self.update(Message::Log(
+                    model::log::Level::Info,
+                    format!("Message::FormatSelected: {}x{}", fmt.width, fmt.height),
+                ));
+
+                // we need to destroy the stream to apply new parameters
+                self.stream = None;
+
+                // read the current format and set the resolution
+                let device = self.device.as_mut().unwrap();
+                let mut format = device.get_format().unwrap();
+                format.width = fmt.width;
+                format.height = fmt.height;
+                device.set_format(&format).unwrap();
+
+                // recreate the stream with the new format
+                unsafe {
+                    self.stream = Some(mem::transmute(device.stream().unwrap()));
                 }
             }
             Message::LogLevelSelected(level) => {
@@ -135,12 +176,20 @@ impl<'a> Application for Eyece<'a> {
         const PADDING: u16 = 10;
 
         // Device selection, format configuration, etc.
-        let config = Row::new().spacing(SPACING).push(PickList::new(
-            &mut self.device_list,
-            &self.devices,
-            self.device_selection.clone(),
-            Message::DeviceSelected,
-        ));
+        let config = Row::new()
+            .spacing(SPACING)
+            .push(PickList::new(
+                &mut self.device_list,
+                &self.devices,
+                self.device_selection.clone(),
+                Message::DeviceSelected,
+            ))
+            .push(PickList::new(
+                &mut self.format_list,
+                &self.formats,
+                self.format_selection.clone(),
+                Message::FormatSelected,
+            ));
 
         // Debug panel.
         let debug = Row::new().push(PickList::new(
