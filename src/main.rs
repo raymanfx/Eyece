@@ -18,8 +18,10 @@ fn main() {
 
 #[derive(Default)]
 struct Eyece<'a> {
-    device: Option<Box<dyn Device>>,
+    // Keep the order of these two!
+    // The stream must be dropped before the device is.
     stream: Option<Box<dyn Stream<Item = DynamicImageView<'a>>>>,
+    device: Option<Box<dyn Device>>,
 
     devices: Vec<model::device::Info>,
     device_list: pick_list::State<model::device::Info>,
