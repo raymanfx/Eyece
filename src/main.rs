@@ -7,9 +7,10 @@ use eye::prelude::*;
 
 use ffimage::packed::dynamic::ImageView as DynamicImageView;
 
+use iced::widget::image;
 use iced::{
-    executor, futures, pick_list, scrollable, Application, Column, Command, Element, Length,
-    PickList, Row, Scrollable, Settings, Text,
+    executor, futures, pick_list, scrollable, time, Application, Column, Command, Element, Image,
+    Length, PickList, Row, Scrollable, Settings, Subscription, Text,
 };
 
 fn main() {
@@ -22,6 +23,7 @@ struct Eyece<'a> {
     // The stream must be dropped before the device is.
     stream: Option<Box<dyn Stream<Item = DynamicImageView<'a>>>>,
     device: Option<Box<dyn Device>>,
+    image: Option<image::Handle>,
 
     devices: Vec<model::device::Node>,
     device_list: pick_list::State<model::device::Node>,
@@ -44,6 +46,7 @@ enum Message {
     FormatSelected(model::device::Format),
     LogLevelSelected(model::log::Level),
     Log(model::log::Level, String),
+    NextFrame,
 }
 
 impl<'a> Application for Eyece<'a> {
@@ -66,6 +69,14 @@ impl<'a> Application for Eyece<'a> {
             },
             Command::perform(futures::future::ready(devices), Message::EnumerateDevices),
         )
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        if self.stream.is_some() {
+            time::every(std::time::Duration::from_millis(33)).map(|_| Message::NextFrame)
+        } else {
+            Subscription::none()
+        }
     }
 
     fn title(&self) -> String {
@@ -165,6 +176,21 @@ impl<'a> Application for Eyece<'a> {
                 }
                 self.log_buffer.push_back((level, message));
             }
+            Message::NextFrame => {
+                self.image = match &mut self.stream {
+                    Some(stream) => {
+                        let image = stream.next().unwrap();
+                        let pixels = image.raw().as_slice().unwrap().to_vec();
+
+                        Some(image::Handle::from_pixels(
+                            image.width(),
+                            image.height(),
+                            pixels,
+                        ))
+                    }
+                    None => None,
+                };
+            }
         }
 
         Command::none()
@@ -190,6 +216,11 @@ impl<'a> Application for Eyece<'a> {
                 self.format_selection.clone(),
                 Message::FormatSelected,
             ));
+
+        let mut image = Row::new();
+        if let Some(handle) = self.image.as_ref().cloned() {
+            image = image.push(Image::new(handle));
+        }
 
         // Debug panel.
         let debug = Row::new().push(PickList::new(
@@ -218,6 +249,7 @@ impl<'a> Application for Eyece<'a> {
         Column::new()
             .padding(PADDING)
             .push(config)
+            .push(image)
             .push(debug)
             .push(logs)
             .into()
