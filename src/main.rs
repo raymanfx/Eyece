@@ -30,6 +30,24 @@ macro_rules! unwrap_or_return {
     };
 }
 
+macro_rules! unwrap_or_continue {
+    ( $e:expr ) => {
+        match $e {
+            Ok(x) => x,
+            Err(_) => continue,
+        }
+    };
+    ( $e:expr, $closure:tt ) => {
+        match $e {
+            Ok(x) => x,
+            Err(err) => {
+                $closure(err);
+                continue;
+            }
+        }
+    };
+}
+
 fn main() {
     Eyece::run(Settings::default())
 }
@@ -185,18 +203,7 @@ impl<'a> Application for Eyece<'a> {
                         match &control.representation {
                             model::control::Representation::Boolean
                             | model::control::Representation::Integer(_) => {
-                                value = unwrap_or_return!(
-                                    device.control(control.id),
-                                    Command::none(),
-                                    (|err| self.log.update(LogMessage::Log(
-                                        model::log::Level::Warn,
-                                        format!(
-                                            "Message::DeviceSelected: Failed to read control ({})",
-                                            err
-                                        ),
-                                    )))
-                                );
-
+                                value = unwrap_or_continue!(device.control(control.id));
                                 control.value = value;
                             }
                             _ => continue,
