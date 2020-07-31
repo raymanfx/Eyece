@@ -5,6 +5,6 @@ authors = ["Christopher N. Hesse <raymanfx@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-eye = { git = "https://github.com/raymanfx/eye-rs", rev = "d0eaf2c5" }
+eye = { git = "https://github.com/raymanfx/eye-rs", rev = "87b381fe" }
 ffimage = { git = "https://github.com/raymanfx/ffimage", rev = "19a08609" }
 iced = { git = "https://github.com/hecrj/iced", features = ["image", "tokio"], rev = "51c22f24" }

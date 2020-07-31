@@ -54,7 +54,7 @@ impl<'a> Application for Eyece<'a> {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         // Perform initial device enumeration.
         // TODO: Async?
-        let devices: Vec<model::device::Node> = DeviceList::enumerate()
+        let devices: Vec<model::device::Node> = DeviceFactory::enumerate()
             .iter()
             .map(|dev| model::device::Node::from(dev))
             .collect();
@@ -94,7 +94,7 @@ impl<'a> Application for Eyece<'a> {
 
                 // open the device and read its current format
                 let mut device = DeviceFactory::create(dev.index as usize).unwrap();
-                let mut format = device.get_format().unwrap();
+                let mut format = device.format().unwrap();
 
                 // Iced only supports BGRA images, so request that exact format.
                 // Eye-rs will transparently convert the images on-the-fly if necessary
@@ -146,7 +146,7 @@ impl<'a> Application for Eyece<'a> {
 
                 // read the current format and set the resolution
                 let device = self.device.as_mut().unwrap();
-                let mut format = device.get_format().unwrap();
+                let mut format = device.format().unwrap();
                 format.width = fmt.width;
                 format.height = fmt.height;
                 device.set_format(&format).unwrap();
