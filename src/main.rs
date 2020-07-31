@@ -8,8 +8,8 @@ use eye::prelude::*;
 use ffimage::packed::dynamic::ImageView as DynamicImageView;
 
 use iced::{
-    executor, futures, pick_list, scrollable, Application, Column, Command, Element, Length,
-    PickList, Row, Scrollable, Settings, Text,
+    executor, pick_list, scrollable, Application, Column, Command, Element, Length, PickList, Row,
+    Scrollable, Settings, Text,
 };
 
 macro_rules! unwrap_or_return {
@@ -41,27 +41,16 @@ struct Eyece<'a> {
     stream: Option<Box<dyn Stream<Item = DynamicImageView<'a>>>>,
     device: Option<Box<dyn Device>>,
 
-    devices: Vec<model::device::Node>,
-    device_list: pick_list::State<model::device::Node>,
-    device_selection: Option<model::device::Node>,
-
-    formats: Vec<model::device::Format>,
-    format_list: pick_list::State<model::device::Format>,
-    format_selection: Option<model::device::Format>,
-
-    log: scrollable::State,
-    loglevel_list: pick_list::State<model::log::Level>,
-    loglevel_selection: model::log::Level,
-    log_buffer: VecDeque<(model::log::Level, String)>,
+    config: Config,
+    log: Log,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    EnumerateDevices(Vec<model::device::Node>),
     DeviceSelected(model::device::Node),
     FormatSelected(model::device::Format),
-    LogLevelSelected(model::log::Level),
-    Log(model::log::Level, String),
+    ConfigMessage(ConfigMessage),
+    LogMessage(LogMessage),
 }
 
 impl<'a> Application for Eyece<'a> {
@@ -77,13 +66,14 @@ impl<'a> Application for Eyece<'a> {
             .map(|dev| model::device::Node::from(dev))
             .collect();
 
-        (
-            Eyece {
-                loglevel_selection: model::log::Level::Warn,
-                ..Default::default()
-            },
-            Command::perform(futures::future::ready(devices), Message::EnumerateDevices),
-        )
+        let mut eyece = Eyece {
+            ..Default::default()
+        };
+
+        eyece.config.devices = devices;
+        eyece.log.level = model::log::Level::Warn;
+
+        (eyece, Command::none())
     }
 
     fn title(&self) -> String {
@@ -92,16 +82,6 @@ impl<'a> Application for Eyece<'a> {
 
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::EnumerateDevices(devices) => {
-                self.devices = devices;
-                self.update(Message::Log(
-                    model::log::Level::Info,
-                    format!(
-                        "Message::EnumerateDevices: Found {} device(s)",
-                        self.devices.len()
-                    ),
-                ));
-            }
             Message::DeviceSelected(dev) => {
                 // dispose of any existing streams
                 self.stream = None;
@@ -111,7 +91,7 @@ impl<'a> Application for Eyece<'a> {
                 let mut device = unwrap_or_return!(
                     DeviceFactory::create(dev.index as usize),
                     Command::none(),
-                    (|err| self.update(Message::Log(
+                    (|err| self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Message::DeviceSelected: Failed to open device ({})", err),
                     )))
@@ -121,7 +101,7 @@ impl<'a> Application for Eyece<'a> {
                 let mut format = unwrap_or_return!(
                     device.format(),
                     Command::none(),
-                    (|err| self.update(Message::Log(
+                    (|err| self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Message::DeviceSelected: Failed to read format ({})", err),
                     )))
@@ -134,7 +114,7 @@ impl<'a> Application for Eyece<'a> {
                 let format = unwrap_or_return!(
                     device.set_format(&format),
                     Command::none(),
-                    (|err| self.update(Message::Log(
+                    (|err| self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Message::DeviceSelected: Failed to write format ({})", err),
                     )))
@@ -142,11 +122,10 @@ impl<'a> Application for Eyece<'a> {
 
                 if format.pixfmt == PixelFormat::Bgra(32) {
                     // enumerate formats
-                    self.formats = Vec::new();
                     let formats = unwrap_or_return!(
                         device.query_formats(),
                         Command::none(),
-                        (|err| self.update(Message::Log(
+                        (|err| self.log.update(LogMessage::Log(
                             model::log::Level::Warn,
                             format!(
                                 "Message::DeviceSelected: Failed to query resolutions ({})",
@@ -155,10 +134,11 @@ impl<'a> Application for Eyece<'a> {
                         )))
                     );
 
+                    let mut resolutions = Vec::new();
                     for info in formats {
                         if info.pixfmt == format.pixfmt {
                             for res in info.resolutions {
-                                self.formats.push(model::device::Format {
+                                resolutions.push(model::device::Format {
                                     width: res.0,
                                     height: res.1,
                                 });
@@ -174,14 +154,15 @@ impl<'a> Application for Eyece<'a> {
                     }
 
                     // update UI state
-                    self.device_selection = Some(dev.clone());
+                    self.config.device = Some(dev);
+                    self.config.formats = resolutions;
 
-                    self.update(Message::Log(
+                    self.log.update(LogMessage::Log(
                         model::log::Level::Info,
                         format!("Message::DeviceSelected: Found suitable device (BGRA), resolution = {}x{}", format.width, format.height),
                     ));
                 } else {
-                    self.update(Message::Log(
+                    self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Message::DeviceSelected: Device does not offer BGRA buffers"),
                     ));
@@ -196,7 +177,7 @@ impl<'a> Application for Eyece<'a> {
                 let mut format = unwrap_or_return!(
                     device.format(),
                     Command::none(),
-                    (|err| self.update(Message::Log(
+                    (|err| self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Message::FormatSelected: Failed to read format ({})", err),
                     )))
@@ -206,7 +187,7 @@ impl<'a> Application for Eyece<'a> {
                 let format = unwrap_or_return!(
                     device.set_format(&format),
                     Command::none(),
-                    (|err| self.update(Message::Log(
+                    (|err| self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Message::FormatSelected: Failed to write format ({})", err),
                     )))
@@ -218,9 +199,9 @@ impl<'a> Application for Eyece<'a> {
                 }
 
                 // update UI state
-                self.format_selection = Some(fmt);
+                self.config.format = Some(fmt);
 
-                self.update(Message::Log(
+                self.log.update(LogMessage::Log(
                     model::log::Level::Info,
                     format!(
                         "Message::FormatSelected: {}x{}",
@@ -228,14 +209,13 @@ impl<'a> Application for Eyece<'a> {
                     ),
                 ));
             }
-            Message::LogLevelSelected(level) => {
-                self.loglevel_selection = level;
-            }
-            Message::Log(level, message) => {
-                if self.log_buffer.len() > 100 {
-                    self.log_buffer.pop_front();
+            Message::ConfigMessage(msg) => {
+                for msg in self.config.update(msg) {
+                    self.update(msg);
                 }
-                self.log_buffer.push_back((level, message));
+            }
+            Message::LogMessage(msg) => {
+                self.log.update(msg);
             }
         }
 
@@ -244,40 +224,126 @@ impl<'a> Application for Eyece<'a> {
 
     fn view(&mut self) -> Element<Message> {
         // Uniform padding and spacing for all elements.
-        const SPACING: u16 = 10;
+        const PADDING: u16 = 10;
+
+        Column::new()
+            .padding(PADDING)
+            .push(self.config.view().map(|msg| Message::ConfigMessage(msg)))
+            .push(self.log.view().map(|msg| Message::LogMessage(msg)))
+            .into()
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Config {
+    devices: Vec<model::device::Node>,
+    device: Option<model::device::Node>,
+    device_list: pick_list::State<model::device::Node>,
+
+    formats: Vec<model::device::Format>,
+    format: Option<model::device::Format>,
+    format_list: pick_list::State<model::device::Format>,
+}
+
+#[derive(Debug, Clone)]
+enum ConfigMessage {
+    DeviceSelected(model::device::Node),
+    FormatSelected(model::device::Format),
+}
+
+impl Config {
+    fn update(&mut self, message: ConfigMessage) -> Vec<Message> {
+        match message {
+            ConfigMessage::DeviceSelected(dev) => vec![
+                Message::LogMessage(LogMessage::Log(
+                    model::log::Level::Info,
+                    format!("ConfigMessage::DeviceSelected: {}: {}", dev.index, dev.name),
+                )),
+                Message::DeviceSelected(dev),
+            ],
+            ConfigMessage::FormatSelected(fmt) => vec![
+                Message::LogMessage(LogMessage::Log(
+                    model::log::Level::Info,
+                    format!(
+                        "ConfigMessage::FormatSelected: {}x{}",
+                        fmt.width, fmt.height
+                    ),
+                )),
+                Message::FormatSelected(fmt),
+            ],
+        }
+    }
+
+    fn view(&mut self) -> Element<ConfigMessage> {
+        // Uniform padding and spacing for all elements.
         const PADDING: u16 = 10;
 
         // Device selection, format configuration, etc.
-        let config = Row::new()
-            .spacing(SPACING)
+        Row::new()
+            .padding(PADDING)
             .push(PickList::new(
                 &mut self.device_list,
                 &self.devices,
-                self.device_selection.clone(),
-                Message::DeviceSelected,
+                self.device.clone(),
+                ConfigMessage::DeviceSelected,
             ))
             .push(PickList::new(
                 &mut self.format_list,
                 &self.formats,
-                self.format_selection.clone(),
-                Message::FormatSelected,
-            ));
+                self.format.clone(),
+                ConfigMessage::FormatSelected,
+            ))
+            .into()
+    }
+}
 
-        // Debug panel.
-        let debug = Row::new().push(PickList::new(
-            &mut self.loglevel_list,
+#[derive(Debug, Default, Clone)]
+struct Log {
+    state: scrollable::State,
+    level: model::log::Level,
+    level_list: pick_list::State<model::log::Level>,
+    buffer: VecDeque<(model::log::Level, String)>,
+}
+
+#[derive(Debug, Clone)]
+enum LogMessage {
+    Log(model::log::Level, String),
+    LevelSelected(model::log::Level),
+}
+
+impl Log {
+    fn update(&mut self, message: LogMessage) {
+        match message {
+            LogMessage::Log(level, message) => {
+                if self.buffer.len() > 100 {
+                    self.buffer.pop_front();
+                }
+                self.buffer.push_back((level, message));
+            }
+            LogMessage::LevelSelected(level) => {
+                self.level = level;
+            }
+        }
+    }
+
+    fn view(&mut self) -> Element<LogMessage> {
+        // Uniform padding and spacing for all elements.
+        const SPACING: u16 = 10;
+        const PADDING: u16 = 10;
+
+        let settings = Row::new().push(PickList::new(
+            &mut self.level_list,
             &model::log::Level::ALL[..],
-            Some(self.loglevel_selection),
-            Message::LogLevelSelected,
+            Some(self.level),
+            LogMessage::LevelSelected,
         ));
 
-        // Log messages.
-        let mut logs = Scrollable::new(&mut self.log)
+        let mut logs = Scrollable::new(&mut self.state)
             .width(Length::Fill)
             .height(Length::Units(100));
 
-        for entry in &self.log_buffer {
-            if entry.0 as u8 <= self.loglevel_selection as u8 {
+        for entry in &self.buffer {
+            if entry.0 as u8 <= self.level as u8 {
                 logs = logs.push(
                     Row::new()
                         .spacing(SPACING)
@@ -289,8 +355,7 @@ impl<'a> Application for Eyece<'a> {
 
         Column::new()
             .padding(PADDING)
-            .push(config)
-            .push(debug)
+            .push(settings)
             .push(logs)
             .into()
     }
