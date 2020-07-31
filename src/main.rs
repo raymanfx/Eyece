@@ -8,8 +8,8 @@ use eye::prelude::*;
 use ffimage::packed::dynamic::ImageView as DynamicImageView;
 
 use iced::{
-    executor, futures, pick_list, scrollable, Application, Column, Command, Element, Length,
-    PickList, Row, Scrollable, Settings, Text,
+    executor, futures, pick_list, scrollable, Application, Button, Checkbox, Column, Command,
+    Element, Length, PickList, Row, Scrollable, Settings, Slider, Text,
 };
 
 macro_rules! unwrap_or_return {
@@ -49,6 +49,9 @@ struct Eyece<'a> {
     format_list: pick_list::State<model::device::Format>,
     format_selection: Option<model::device::Format>,
 
+    controls: Vec<model::device::Control>,
+    control_pane: scrollable::State,
+
     log: scrollable::State,
     loglevel_list: pick_list::State<model::log::Level>,
     loglevel_selection: model::log::Level,
@@ -60,6 +63,7 @@ enum Message {
     EnumerateDevices(Vec<model::device::Node>),
     DeviceSelected(model::device::Node),
     FormatSelected(model::device::Format),
+    ControlChanged(model::device::Control),
     LogLevelSelected(model::log::Level),
     Log(model::log::Level, String),
 }
@@ -166,6 +170,52 @@ impl<'a> Application for Eyece<'a> {
                         }
                     }
 
+                    // enumerate controls
+                    let controls = unwrap_or_return!(
+                        device.query_controls(),
+                        Command::none(),
+                        (|err| self.update(Message::Log(
+                            model::log::Level::Warn,
+                            format!(
+                                "Message::DeviceSelected: Failed to query controls ({})",
+                                err
+                            ),
+                        )))
+                    );
+                    self.controls = controls
+                        .iter()
+                        .map(|ctrl| model::device::Control::from(ctrl))
+                        .collect();
+
+                    // query control values
+                    for ctrl in &mut self.controls {
+                        if let Some(state) = &mut ctrl.state {
+                            let value = unwrap_or_return!(
+                                device.control(ctrl.id),
+                                Command::none(),
+                                (|err| self.update(Message::Log(
+                                    model::log::Level::Warn,
+                                    format!(
+                                        "Message::DeviceSelected: Failed to read control ({})",
+                                        err
+                                    ),
+                                )))
+                            );
+                            match state {
+                                model::device::ControlState::Checkbox(state) => match value {
+                                    eye::control::Value::Integer(val) => *state = val != 0,
+                                    eye::control::Value::Boolean(val) => *state = val,
+                                    _ => continue,
+                                },
+                                model::device::ControlState::Slider(state) => match value {
+                                    eye::control::Value::Integer(val) => state.value = val as f64,
+                                    _ => continue,
+                                },
+                                _ => continue,
+                            }
+                        }
+                    }
+
                     self.device = Some(device);
                     unsafe {
                         self.stream = Some(mem::transmute(
@@ -228,6 +278,44 @@ impl<'a> Application for Eyece<'a> {
                     ),
                 ));
             }
+            Message::ControlChanged(control) => {
+                let device = self.device.as_mut().unwrap();
+
+                for ctrl in &mut self.controls {
+                    if ctrl.id == control.id {
+                        let value = match &control.state {
+                            Some(state) => state.into(),
+                            None => eye::control::Value::None,
+                        };
+                        unwrap_or_return!(
+                            device.set_control(ctrl.id, &value),
+                            Command::none(),
+                            (|err| self.update(Message::Log(
+                                model::log::Level::Warn,
+                                format!(
+                                    "Message::ControlChanged: Failed to write control ({})",
+                                    err
+                                ),
+                            )))
+                        );
+
+                        // we successfully wrote the control value, now update its state
+                        ctrl.state = control.state.clone();
+                    }
+                }
+
+                let state_str = match &control.state {
+                    Some(state) => state.to_string(),
+                    None => "None".to_string(),
+                };
+                self.update(Message::Log(
+                    model::log::Level::Info,
+                    format!(
+                        "Message::ControlChanged: ID: {}, State: {}",
+                        control.id, state_str
+                    ),
+                ));
+            }
             Message::LogLevelSelected(level) => {
                 self.loglevel_selection = level;
             }
@@ -263,6 +351,80 @@ impl<'a> Application for Eyece<'a> {
                 Message::FormatSelected,
             ));
 
+        // Device controls
+        let mut controls = Scrollable::new(&mut self.control_pane).width(Length::Fill);
+        for control in &mut self.controls {
+            let control_clone = control.clone();
+            if let Some(state) = &mut control.state {
+                match state {
+                    model::device::ControlState::Button(state) => {
+                        controls = controls.push(
+                            Row::new()
+                                .spacing(SPACING)
+                                .push(Text::new(control.name.clone()))
+                                .push(
+                                    Button::new(state, Text::new("Toggle"))
+                                        .on_press(Message::ControlChanged(control_clone)),
+                                ),
+                        );
+                    }
+                    model::device::ControlState::Checkbox(state) => {
+                        controls = controls.push(
+                            Row::new()
+                                .spacing(SPACING)
+                                .push(Text::new(control.name.clone()))
+                                .push(Checkbox::new(*state, "", move |val| {
+                                    //control_clone.state = Some(model::device::ControlState::Checkbox(val));
+                                    let control = model::device::Control {
+                                        id: control_clone.id,
+                                        name: control_clone.name.clone(),
+                                        state: Some(model::device::ControlState::Checkbox(val)),
+                                    };
+                                    Message::ControlChanged(control)
+                                })),
+                        );
+                    }
+                    model::device::ControlState::Slider(state) => {
+                        let state_clone = state.clone();
+                        controls = controls.push(
+                            Row::new()
+                                .spacing(SPACING)
+                                .push(Text::new(control.name.clone()))
+                                .push(
+                                    Slider::new(
+                                        &mut state.state,
+                                        state.range.clone(),
+                                        state.value,
+                                        move |val| {
+                                            //control_clone.state = Some(model::device::ControlState::Checkbox(val));
+                                            let control = model::device::Control {
+                                                id: control_clone.id,
+                                                name: control_clone.name.clone(),
+                                                state: Some(model::device::ControlState::Slider(
+                                                    model::device::SliderState {
+                                                        range: state_clone.range.clone(),
+                                                        step: state_clone.step,
+                                                        value: val,
+                                                        state: state_clone.state,
+                                                    },
+                                                )),
+                                            };
+                                            Message::ControlChanged(control)
+                                        },
+                                    )
+                                    .step(state.step),
+                                ),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Main area: live preview + controls
+        let main = Row::new()
+            .spacing(SPACING)
+            .push(Column::new().push(controls));
+
         // Debug panel.
         let debug = Row::new().push(PickList::new(
             &mut self.loglevel_list,
@@ -290,6 +452,7 @@ impl<'a> Application for Eyece<'a> {
         Column::new()
             .padding(PADDING)
             .push(config)
+            .push(main)
             .push(debug)
             .push(logs)
             .into()
