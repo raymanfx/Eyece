@@ -48,9 +48,9 @@ struct Eyece<'a> {
 
 #[derive(Debug, Clone)]
 enum Message {
-    DeviceSelected(model::device::Node),
-    FormatSelected(model::device::Format),
-    ControlChanged(model::device::Control),
+    DeviceSelected(model::device::Device),
+    FormatSelected(model::format::Format),
+    ControlChanged(model::control::Control),
     ConfigMessage(ConfigMessage),
     ControlsMessage(ControlsMessage),
     LogMessage(LogMessage),
@@ -64,9 +64,9 @@ impl<'a> Application for Eyece<'a> {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         // Perform initial device enumeration.
         // TODO: Async?
-        let devices: Vec<model::device::Node> = DeviceFactory::enumerate()
+        let devices: Vec<model::device::Device> = DeviceFactory::enumerate()
             .iter()
-            .map(|dev| model::device::Node::from(dev))
+            .map(|dev| model::device::Device::from(dev))
             .collect();
 
         let mut eyece = Eyece {
@@ -141,7 +141,7 @@ impl<'a> Application for Eyece<'a> {
                     for info in formats {
                         if info.pixfmt == format.pixfmt {
                             for res in info.resolutions {
-                                resolutions.push(model::device::Format {
+                                resolutions.push(model::format::Format {
                                     width: res.0,
                                     height: res.1,
                                 });
@@ -164,13 +164,13 @@ impl<'a> Application for Eyece<'a> {
                     self.controls.controls = controls
                         .iter()
                         .map(|ctrl| {
-                            let model = model::device::Control::from(ctrl);
+                            let model = model::control::Control::from(ctrl);
                             let state = match &model.representation {
-                                model::device::ControlRepresentation::Button => {
+                                model::control::Representation::Button => {
                                     Some(ControlState::Button(button::State::default()))
                                 }
-                                model::device::ControlRepresentation::Boolean => None,
-                                model::device::ControlRepresentation::Integer(_) => {
+                                model::control::Representation::Boolean => None,
+                                model::control::Representation::Integer(_) => {
                                     Some(ControlState::Slider(slider::State::default()))
                                 }
                                 _ => None,
@@ -183,8 +183,8 @@ impl<'a> Application for Eyece<'a> {
                     for (control, _) in &mut self.controls.controls {
                         let value;
                         match &control.representation {
-                            model::device::ControlRepresentation::Boolean
-                            | model::device::ControlRepresentation::Integer(_) => {
+                            model::control::Representation::Boolean
+                            | model::control::Representation::Integer(_) => {
                                 value = unwrap_or_return!(
                                     device.control(control.id),
                                     Command::none(),
@@ -289,10 +289,10 @@ impl<'a> Application for Eyece<'a> {
                 }
 
                 let value_str = match &control.value {
-                    model::device::ControlValue::None => "None".to_string(),
-                    model::device::ControlValue::String(val) => val.to_string(),
-                    model::device::ControlValue::Boolean(val) => val.to_string(),
-                    model::device::ControlValue::Integer(val) => val.to_string(),
+                    model::control::Value::None => "None".to_string(),
+                    model::control::Value::String(val) => val.to_string(),
+                    model::control::Value::Boolean(val) => val.to_string(),
+                    model::control::Value::Integer(val) => val.to_string(),
                 };
                 self.log.update(LogMessage::Log(
                     model::log::Level::Info,
@@ -339,19 +339,19 @@ impl<'a> Application for Eyece<'a> {
 
 #[derive(Debug, Default, Clone)]
 struct Config {
-    devices: Vec<model::device::Node>,
-    device: Option<model::device::Node>,
-    device_list: pick_list::State<model::device::Node>,
+    devices: Vec<model::device::Device>,
+    device: Option<model::device::Device>,
+    device_list: pick_list::State<model::device::Device>,
 
-    formats: Vec<model::device::Format>,
-    format: Option<model::device::Format>,
-    format_list: pick_list::State<model::device::Format>,
+    formats: Vec<model::format::Format>,
+    format: Option<model::format::Format>,
+    format_list: pick_list::State<model::format::Format>,
 }
 
 #[derive(Debug, Clone)]
 enum ConfigMessage {
-    DeviceSelected(model::device::Node),
-    FormatSelected(model::device::Format),
+    DeviceSelected(model::device::Device),
+    FormatSelected(model::format::Format),
 }
 
 impl Config {
@@ -403,7 +403,7 @@ impl Config {
 #[derive(Debug, Default, Clone)]
 struct Controls {
     state: scrollable::State,
-    controls: Vec<(model::device::Control, Option<ControlState>)>,
+    controls: Vec<(model::control::Control, Option<ControlState>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -414,7 +414,7 @@ enum ControlState {
 
 #[derive(Debug, Clone)]
 enum ControlsMessage {
-    ControlChanged(model::device::Control),
+    ControlChanged(model::control::Control),
 }
 
 impl Controls {
@@ -441,7 +441,7 @@ impl Controls {
             let control_clone = control.clone();
 
             match &control.representation {
-                model::device::ControlRepresentation::Button => {
+                model::control::Representation::Button => {
                     let state = match state.as_mut().unwrap() {
                         ControlState::Button(state) => state,
                         _ => panic!("Wrong button state"),
@@ -456,10 +456,10 @@ impl Controls {
                             ),
                     );
                 }
-                model::device::ControlRepresentation::Boolean => {
+                model::control::Representation::Boolean => {
                     let checked = match control.value {
-                        model::device::ControlValue::Boolean(val) => Some(val),
-                        model::device::ControlValue::Integer(val) => Some(val != 0),
+                        model::control::Value::Boolean(val) => Some(val),
+                        model::control::Value::Integer(val) => Some(val != 0),
                         _ => None,
                     };
                     controls = controls.push(
@@ -468,18 +468,18 @@ impl Controls {
                             .push(Text::new(control.name.clone()))
                             .push(Checkbox::new(checked.unwrap(), "", move |val| {
                                 let mut control = control_clone.clone();
-                                control.value = model::device::ControlValue::Boolean(val);
+                                control.value = model::control::Value::Boolean(val);
                                 ControlsMessage::ControlChanged(control)
                             })),
                     );
                 }
-                model::device::ControlRepresentation::Integer(repr) => {
+                model::control::Representation::Integer(repr) => {
                     let state = match state.as_mut().unwrap() {
                         ControlState::Slider(state) => state,
                         _ => panic!("Wrong slider state"),
                     };
                     let value = match control.value {
-                        model::device::ControlValue::Integer(val) => Some(val),
+                        model::control::Value::Integer(val) => Some(val),
                         _ => None,
                     };
                     controls = controls.push(
@@ -493,8 +493,7 @@ impl Controls {
                                     value.unwrap() as f64,
                                     move |val| {
                                         let mut control = control_clone.clone();
-                                        control.value =
-                                            model::device::ControlValue::Integer(val as i64);
+                                        control.value = model::control::Value::Integer(val as i64);
                                         ControlsMessage::ControlChanged(control)
                                     },
                                 )
