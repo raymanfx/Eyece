@@ -12,6 +12,24 @@ use iced::{
     PickList, Row, Scrollable, Settings, Text,
 };
 
+macro_rules! unwrap_or_return {
+    ( $e:expr, $ret:expr ) => {
+        match $e {
+            Ok(x) => x,
+            Err(_) => return $ret,
+        }
+    };
+    ( $e:expr, $ret:expr, $closure:tt ) => {
+        match $e {
+            Ok(x) => x,
+            Err(err) => {
+                $closure(err);
+                return $ret;
+            }
+        }
+    };
+}
+
 fn main() {
     Eyece::run(Settings::default())
 }
@@ -85,26 +103,59 @@ impl<'a> Application for Eyece<'a> {
                 ));
             }
             Message::DeviceSelected(dev) => {
-                // update UI state
-                self.device_selection = Some(dev.clone());
-
                 // dispose of any existing streams
                 self.stream = None;
                 self.device = None;
 
-                // open the device and read its current format
-                let mut device = DeviceFactory::create(dev.index as usize).unwrap();
-                let mut format = device.format().unwrap();
+                // open the device
+                let mut device = unwrap_or_return!(
+                    DeviceFactory::create(dev.index as usize),
+                    Command::none(),
+                    (|err| self.update(Message::Log(
+                        model::log::Level::Warn,
+                        format!("Message::DeviceSelected: Failed to open device ({})", err),
+                    )))
+                );
+
+                // read the current format
+                let mut format = unwrap_or_return!(
+                    device.format(),
+                    Command::none(),
+                    (|err| self.update(Message::Log(
+                        model::log::Level::Warn,
+                        format!("Message::DeviceSelected: Failed to read format ({})", err),
+                    )))
+                );
 
                 // Iced only supports BGRA images, so request that exact format.
                 // Eye-rs will transparently convert the images on-the-fly if necessary
                 // (and possible).
                 format.pixfmt = PixelFormat::Bgra(32);
-                format = device.set_format(&format).unwrap();
+                let format = unwrap_or_return!(
+                    device.set_format(&format),
+                    Command::none(),
+                    (|err| self.update(Message::Log(
+                        model::log::Level::Warn,
+                        format!("Message::DeviceSelected: Failed to write format ({})", err),
+                    )))
+                );
+
                 if format.pixfmt == PixelFormat::Bgra(32) {
                     // enumerate formats
                     self.formats = Vec::new();
-                    for info in device.query_formats().unwrap() {
+                    let formats = unwrap_or_return!(
+                        device.query_formats(),
+                        Command::none(),
+                        (|err| self.update(Message::Log(
+                            model::log::Level::Warn,
+                            format!(
+                                "Message::DeviceSelected: Failed to query resolutions ({})",
+                                err
+                            ),
+                        )))
+                    );
+
+                    for info in formats {
                         if info.pixfmt == format.pixfmt {
                             for res in info.resolutions {
                                 self.formats.push(model::device::Format {
@@ -122,6 +173,9 @@ impl<'a> Application for Eyece<'a> {
                         ));
                     }
 
+                    // update UI state
+                    self.device_selection = Some(dev.clone());
+
                     self.update(Message::Log(
                         model::log::Level::Info,
                         format!("Message::DeviceSelected: Found suitable device (BGRA), resolution = {}x{}", format.width, format.height),
@@ -134,27 +188,45 @@ impl<'a> Application for Eyece<'a> {
                 }
             }
             Message::FormatSelected(fmt) => {
-                self.format_selection = Some(fmt);
-
-                self.update(Message::Log(
-                    model::log::Level::Info,
-                    format!("Message::FormatSelected: {}x{}", fmt.width, fmt.height),
-                ));
-
                 // we need to destroy the stream to apply new parameters
                 self.stream = None;
 
                 // read the current format and set the resolution
                 let device = self.device.as_mut().unwrap();
-                let mut format = device.format().unwrap();
+                let mut format = unwrap_or_return!(
+                    device.format(),
+                    Command::none(),
+                    (|err| self.update(Message::Log(
+                        model::log::Level::Warn,
+                        format!("Message::FormatSelected: Failed to read format ({})", err),
+                    )))
+                );
                 format.width = fmt.width;
                 format.height = fmt.height;
-                device.set_format(&format).unwrap();
+                let format = unwrap_or_return!(
+                    device.set_format(&format),
+                    Command::none(),
+                    (|err| self.update(Message::Log(
+                        model::log::Level::Warn,
+                        format!("Message::FormatSelected: Failed to write format ({})", err),
+                    )))
+                );
 
                 // recreate the stream with the new format
                 unsafe {
                     self.stream = Some(mem::transmute(device.stream().unwrap()));
                 }
+
+                // update UI state
+                self.format_selection = Some(fmt);
+
+                self.update(Message::Log(
+                    model::log::Level::Info,
+                    format!(
+                        "Message::FormatSelected: {}x{}",
+                        format.width, format.height
+                    ),
+                ));
             }
             Message::LogLevelSelected(level) => {
                 self.loglevel_selection = level;
