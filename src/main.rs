@@ -1,11 +1,11 @@
 mod model;
 
-use std::{collections::VecDeque, mem};
+use std::collections::VecDeque;
 
 use eye::hal::traits::{Device, Stream};
 use eye::prelude::*;
 
-use ffimage::packed::dynamic::ImageView as DynamicImageView;
+use ffimage::packed::dynamic::ImageView;
 
 use iced::{
     button, executor, pick_list, scrollable, slider, Application, Button, Checkbox, Column,
@@ -54,10 +54,8 @@ fn main() {
 
 #[derive(Default)]
 struct Eyece<'a> {
-    // Keep the order of these two!
-    // The stream must be dropped before the device is.
-    stream: Option<Box<dyn Stream<Item = DynamicImageView<'a>>>>,
     device: Option<Box<dyn Device>>,
+    stream: Option<Box<dyn Stream<Item = ImageView<'a>>>>,
 
     config: Config,
     controls: Controls,
@@ -210,12 +208,16 @@ impl<'a> Application for Eyece<'a> {
                         }
                     }
 
+                    // create the buffer stream
+                    self.stream = Some(unwrap_or_return!(
+                        device.stream(),
+                        Command::none(),
+                        (|err| self.log.update(LogMessage::Log(
+                            model::log::Level::Warn,
+                            format!("Message::DeviceSelected: Failed to create stream ({})", err),
+                        )))
+                    ));
                     self.device = Some(device);
-                    unsafe {
-                        self.stream = Some(mem::transmute(
-                            self.device.as_mut().unwrap().stream().unwrap(),
-                        ));
-                    }
 
                     // update UI state
                     self.config.device = Some(dev);
@@ -258,9 +260,14 @@ impl<'a> Application for Eyece<'a> {
                 );
 
                 // recreate the stream with the new format
-                unsafe {
-                    self.stream = Some(mem::transmute(device.stream().unwrap()));
-                }
+                self.stream = Some(unwrap_or_return!(
+                    device.stream(),
+                    Command::none(),
+                    (|err| self.log.update(LogMessage::Log(
+                        model::log::Level::Warn,
+                        format!("Message::FormatSelected: Failed to create stream ({})", err),
+                    )))
+                ));
 
                 // update UI state
                 self.config.format = Some(fmt);
