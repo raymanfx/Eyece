@@ -137,6 +137,7 @@ impl Application for Eyece {
                 eye::subscription::Event::Connected(connection) => {
                     connection.query_formats();
                     connection.query_controls();
+                    connection.start_stream();
                     self.connection = Some(connection);
                 }
                 eye::subscription::Event::Disconnected => {
@@ -179,6 +180,22 @@ impl Application for Eyece {
                             ));
                         }
                     },
+                    eye::connection::Response::StartStream(res) => {
+                        if let Err(e) = res {
+                            self.log.update(LogMessage::Log(
+                                model::log::Level::Warn,
+                                format!("Event::StartStream: Error: {}", e),
+                            ));
+                        }
+                    }
+                    eye::connection::Response::StopStream(res) => {
+                        if let Err(e) = res {
+                            self.log.update(LogMessage::Log(
+                                model::log::Level::Warn,
+                                format!("Event::StopStream: Error: {}", e),
+                            ));
+                        }
+                    }
                     eye::connection::Response::SetFormat(res) => match res {
                         Ok(fmt) => {
                             self.config.format = Some(fmt);
@@ -205,6 +222,9 @@ impl Application for Eyece {
                         )),
                     },
                 },
+                eye::subscription::Event::Stream(handle) => {
+                    self.image = Some(handle.clone());
+                }
             },
         }
 

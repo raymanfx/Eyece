@@ -7,9 +7,23 @@ pub struct Connection {
     comm: mpsc::Sender<Request>,
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.stop_stream();
+    }
+}
+
 impl Connection {
     pub fn new(comm: mpsc::Sender<Request>) -> Self {
         Connection { comm }
+    }
+
+    pub fn start_stream(&self) {
+        self.comm.send(Request::StartStream).unwrap();
+    }
+
+    pub fn stop_stream(&self) {
+        self.comm.send(Request::StopStream).unwrap();
     }
 
     pub fn query_formats(&self) {
@@ -31,6 +45,8 @@ impl Connection {
 
 #[derive(Debug)]
 pub enum Request {
+    StartStream,
+    StopStream,
     QueryFormats,
     QueryControls,
     SetFormat(model::format::Format),
@@ -39,6 +55,8 @@ pub enum Request {
 
 #[derive(Debug)]
 pub enum Response {
+    StartStream(io::Result<()>),
+    StopStream(io::Result<()>),
     QueryFormats(io::Result<Vec<model::format::Format>>),
     QueryControls(io::Result<Vec<model::control::Control>>),
     SetFormat(io::Result<model::format::Format>),

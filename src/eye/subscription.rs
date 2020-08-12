@@ -1,7 +1,9 @@
 use std::{io, sync::mpsc};
 
-use eye::hal::traits::Device;
+use eye::hal::traits::{Device, Stream};
 use eye::prelude::*;
+
+use ffimage::packed::dynamic::ImageView;
 
 use iced_futures::futures;
 
@@ -95,6 +97,7 @@ impl Subscription {
                     Err(e) => Some(Response::SetControl(Err(e))),
                 }
             }
+            _ => None,
         }
     }
 }
@@ -177,6 +180,23 @@ where
                         }
 
                         match request {
+                            Request::StartStream => {
+                                let res = device.stream();
+                                match res {
+                                    Ok(stream) => Some((
+                                        Event::Response(Response::StartStream(Ok(()))),
+                                        State::Streaming {
+                                            comm,
+                                            device,
+                                            stream: unsafe { SendWrapper::new(stream) },
+                                        },
+                                    )),
+                                    Err(e) => Some((
+                                        Event::Response(Response::StartStream(Err(e))),
+                                        State::Idle { comm, device },
+                                    )),
+                                }
+                            }
                             Request::QueryFormats
                             | Request::QueryControls
                             | Request::SetFormat(..)
@@ -191,6 +211,120 @@ where
 
                                 Some((event, State::Idle { comm, device }))
                             }
+                            _ => Some((
+                                Event::Error(io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "cannot handle this request in idle state",
+                                )),
+                                State::Idle { comm, device },
+                            )),
+                        }
+                    }
+                    State::Streaming {
+                        comm,
+                        mut device,
+                        mut stream,
+                    } => {
+                        match comm.try_recv() {
+                            Ok(req) => match req {
+                                Request::StopStream => {
+                                    return Some((
+                                        Event::Response(Response::StopStream(Ok(()))),
+                                        State::Idle { comm, device },
+                                    ));
+                                }
+                                Request::SetFormat(fmt) => {
+                                    // We cannot change the format while a stream is currently
+                                    // active, so drop it and recreate it on success.
+                                    std::mem::drop(stream);
+
+                                    let event = match Self::handle_request(
+                                        &mut *device,
+                                        Request::SetFormat(fmt),
+                                    ) {
+                                        Some(res) => Event::Response(res),
+                                        None => Event::Error(io::Error::new(
+                                            io::ErrorKind::InvalidInput,
+                                            "cannot handle request",
+                                        )),
+                                    };
+
+                                    let res = device.stream();
+                                    match res {
+                                        Ok(stream) => {
+                                            return Some((
+                                                event,
+                                                State::Streaming {
+                                                    comm,
+                                                    device,
+                                                    stream: unsafe { SendWrapper::new(stream) },
+                                                },
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            return Some((
+                                                Event::Response(Response::SetFormat(Err(e))),
+                                                State::Idle { comm, device },
+                                            ));
+                                        }
+                                    }
+                                }
+                                Request::SetControl(ctrl) => {
+                                    let event = match Self::handle_request(
+                                        &mut *device,
+                                        Request::SetControl(ctrl),
+                                    ) {
+                                        Some(res) => Event::Response(res),
+                                        None => Event::Error(io::Error::new(
+                                            io::ErrorKind::InvalidInput,
+                                            "cannot handle request",
+                                        )),
+                                    };
+
+                                    return Some((
+                                        event,
+                                        State::Streaming {
+                                            comm,
+                                            device,
+                                            stream,
+                                        },
+                                    ));
+                                }
+                                _ => {
+                                    return Some((
+                                        Event::Error(io::Error::new(
+                                            io::ErrorKind::InvalidInput,
+                                            "cannot handle this request in streaming state",
+                                        )),
+                                        State::Streaming {
+                                            comm,
+                                            device,
+                                            stream,
+                                        },
+                                    ));
+                                }
+                            },
+                            Err(_) => { /* ignore */ }
+                        }
+
+                        match stream.next() {
+                            Ok(frame) => {
+                                let pixels = frame.raw().as_slice().unwrap().to_vec();
+                                let handle = iced::image::Handle::from_pixels(
+                                    frame.width(),
+                                    frame.height(),
+                                    pixels,
+                                );
+                                Some((
+                                    Event::Stream(handle),
+                                    State::Streaming {
+                                        device,
+                                        stream,
+                                        comm,
+                                    },
+                                ))
+                            }
+                            Err(e) => Some((Event::Error(e), State::Idle { comm, device })),
                         }
                     }
                     State::Finished => {
@@ -209,13 +343,19 @@ pub enum Event {
     Connected(Connection),
     Disconnected,
     Response(Response),
+    Stream(iced::image::Handle),
 }
 
-enum State {
+enum State<'a> {
     Ready(usize),
     Idle {
         comm: mpsc::Receiver<Request>,
         device: SendWrapper<Box<dyn Device>>,
+    },
+    Streaming {
+        comm: mpsc::Receiver<Request>,
+        device: SendWrapper<Box<dyn Device>>,
+        stream: SendWrapper<Box<dyn Stream<Item = ImageView<'a>>>>,
     },
     Finished,
 }
