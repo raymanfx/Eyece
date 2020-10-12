@@ -1,4 +1,4 @@
-use eye::device::ControlInfo;
+use eye::control::Control as Control_;
 
 #[derive(Clone)]
 pub struct Control {
@@ -9,12 +9,12 @@ pub struct Control {
     pub value: Value,
 }
 
-impl core::convert::From<&ControlInfo> for Control {
-    fn from(info: &ControlInfo) -> Self {
+impl core::convert::From<&Control_> for Control {
+    fn from(ctrl: &Control_) -> Self {
         Control {
-            id: info.id,
-            name: info.name.clone(),
-            representation: info.repr.clone(),
+            id: ctrl.id,
+            name: ctrl.name.clone(),
+            representation: ctrl.repr.clone(),
             value: Value::None,
         }
     }

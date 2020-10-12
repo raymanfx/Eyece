@@ -1,5 +1,6 @@
 use std::{io, sync::mpsc};
 
+use eye::device::Device as Dev;
 use eye::hal::traits::{Device, Stream};
 use eye::prelude::*;
 
@@ -14,12 +15,12 @@ use crate::eye::{
 use crate::model;
 
 pub struct Subscription {
-    index: usize,
+    uri: String,
 }
 
 impl Subscription {
-    pub fn new(index: usize) -> Self {
-        Subscription { index }
+    pub fn new<S: Into<String>>(uri: S) -> Self {
+        Subscription { uri: uri.into() }
     }
 }
 
@@ -33,12 +34,10 @@ impl Subscription {
                         let mut resolutions = Vec::new();
                         for info in info {
                             if info.pixfmt == eye::format::PixelFormat::Bgra(24) {
-                                for res in info.resolutions {
-                                    resolutions.push(model::format::Format {
-                                        width: res.0,
-                                        height: res.1,
-                                    });
-                                }
+                                resolutions.push(model::format::Format {
+                                    width: info.width,
+                                    height: info.height,
+                                });
                             }
                         }
 
@@ -60,7 +59,7 @@ impl Subscription {
                         for control in &mut controls {
                             match &control.representation {
                                 model::control::Representation::Boolean
-                                | model::control::Representation::Integer(_) => {
+                                | model::control::Representation::Integer { .. } => {
                                     let res = device.control(control.id);
                                     if let Ok(val) = res {
                                         control.value = val;
@@ -73,6 +72,16 @@ impl Subscription {
                         Some(Response::QueryControls(Ok(controls)))
                     }
                     Err(e) => Some(Response::QueryControls(Err(e))),
+                }
+            }
+            Request::GetFormat => {
+                let res = device.format();
+                match res {
+                    Ok(fmt) => Some(Response::GetFormat(Ok(model::format::Format {
+                        width: fmt.width,
+                        height: fmt.height,
+                    }))),
+                    Err(e) => Some(Response::GetFormat(Err(e))),
                 }
             }
             Request::SetFormat(fmt) => {
@@ -112,7 +121,7 @@ where
         use std::hash::Hash;
 
         std::any::TypeId::of::<Self>().hash(state);
-        self.index.hash(state);
+        self.uri.hash(state);
     }
 
     fn stream(
@@ -120,15 +129,15 @@ where
         _input: futures::stream::BoxStream<'static, I>,
     ) -> futures::stream::BoxStream<'static, Self::Output> {
         Box::pin(futures::stream::unfold(
-            State::Ready(self.index),
+            State::Ready(self.uri),
             |state| async move {
                 match state {
-                    State::Ready(index) => {
+                    State::Ready(uri) => {
                         let (tx, rx) = mpsc::channel();
                         let connection = Connection::new(tx);
 
                         // open the device
-                        let res = DeviceFactory::create(index as usize);
+                        let res = Dev::with_uri(&uri);
                         if res.is_err() {
                             return Some((Event::Error(res.err().unwrap()), State::Finished));
                         }
@@ -347,7 +356,7 @@ pub enum Event {
 }
 
 enum State<'a> {
-    Ready(usize),
+    Ready(String),
     Idle {
         comm: mpsc::Receiver<Request>,
         device: SendWrapper<Box<dyn Device>>,
@@ -355,7 +364,7 @@ enum State<'a> {
     Streaming {
         comm: mpsc::Receiver<Request>,
         device: SendWrapper<Box<dyn Device>>,
-        stream: SendWrapper<Box<dyn Stream<Item = ImageView<'a>>>>,
+        stream: SendWrapper<Box<dyn 'a + for<'b> Stream<'b, Item = ImageView<'b>>>>,
     },
     Finished,
 }

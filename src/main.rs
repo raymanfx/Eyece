@@ -44,9 +44,9 @@ impl Application for Eyece {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         // Perform initial device enumeration.
         // TODO: Async?
-        let devices: Vec<model::device::Device> = eye::DeviceFactory::enumerate()
+        let devices: Vec<model::device::Device> = eye::Device::enumerate()
             .iter()
-            .map(|dev| model::device::Device::from(dev))
+            .map(|dev| model::device::Device::from(dev.as_str()))
             .collect();
 
         let mut eyece = Eyece {
@@ -65,10 +65,8 @@ impl Application for Eyece {
 
     fn subscription(&self) -> Subscription<Message> {
         match &self.config.device {
-            Some(dev) => {
-                iced::Subscription::from_recipe(eye::Subscription::new(dev.index as usize))
-                    .map(Message::ConnectionEvent)
-            }
+            Some(dev) => iced::Subscription::from_recipe(eye::Subscription::new(&dev.uri))
+                .map(Message::ConnectionEvent),
             None => Subscription::none(),
         }
     }
@@ -76,9 +74,9 @@ impl Application for Eyece {
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
             Message::EnumDevices => {
-                self.config.devices = eye::DeviceFactory::enumerate()
+                self.config.devices = eye::Device::enumerate()
                     .iter()
-                    .map(|dev| model::device::Device::from(dev))
+                    .map(|dev| model::device::Device::from(dev.as_str()))
                     .collect();
                 self.log.update(LogMessage::Log(
                     model::log::Level::Info,
@@ -163,7 +161,7 @@ impl Application for Eyece {
                                             Some(ControlState::Button(button::State::default()))
                                         }
                                         model::control::Representation::Boolean => None,
-                                        model::control::Representation::Integer(_) => {
+                                        model::control::Representation::Integer { .. } => {
                                             Some(ControlState::Slider(slider::State::default()))
                                         }
                                         _ => None,
@@ -196,6 +194,18 @@ impl Application for Eyece {
                             ));
                         }
                     }
+                    eye::connection::Response::GetFormat(res) => match res {
+                        Ok(fmt) => {
+                            self.config.format = Some(fmt);
+                        }
+                        Err(e) => {
+                            self.config.format = None;
+                            self.log.update(LogMessage::Log(
+                                model::log::Level::Warn,
+                                format!("Event::GetFormat: Error: {}", e),
+                            ))
+                        }
+                    },
                     eye::connection::Response::SetFormat(res) => match res {
                         Ok(fmt) => {
                             self.config.format = Some(fmt);
@@ -282,7 +292,7 @@ impl Config {
             ConfigMessage::DeviceSelected(dev) => vec![
                 Message::LogMessage(LogMessage::Log(
                     model::log::Level::Info,
-                    format!("ConfigMessage::DeviceSelected: {}: {}", dev.index, dev.name),
+                    format!("ConfigMessage::DeviceSelected: {}", dev.uri),
                 )),
                 Message::DeviceSelected(dev),
             ],
@@ -399,7 +409,11 @@ impl Controls {
                             })),
                     );
                 }
-                model::control::Representation::Integer(repr) => {
+                model::control::Representation::Integer {
+                    range,
+                    step,
+                    default: _,
+                } => {
                     let state = match state.as_mut().unwrap() {
                         ControlState::Slider(state) => state,
                         _ => panic!("Wrong slider state"),
@@ -415,7 +429,7 @@ impl Controls {
                             .push(
                                 Slider::new(
                                     state,
-                                    (repr.range.0 as f64)..=(repr.range.1 as f64),
+                                    (range.0 as f64)..=(range.1 as f64),
                                     value.unwrap() as f64,
                                     move |val| {
                                         let mut control = control_clone.clone();
@@ -423,7 +437,7 @@ impl Controls {
                                         ControlsMessage::ControlChanged(control)
                                     },
                                 )
-                                .step(repr.step as f64),
+                                .step(*step as f64),
                             ),
                     );
                 }

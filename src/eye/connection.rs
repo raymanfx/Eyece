@@ -34,6 +34,10 @@ impl Connection {
         self.comm.send(Request::QueryControls).unwrap();
     }
 
+    pub fn format(&self) {
+        self.comm.send(Request::GetFormat).unwrap();
+    }
+
     pub fn set_format(&self, fmt: &model::format::Format) {
         self.comm.send(Request::SetFormat(fmt.clone())).unwrap();
     }
@@ -49,6 +53,7 @@ pub enum Request {
     StopStream,
     QueryFormats,
     QueryControls,
+    GetFormat,
     SetFormat(model::format::Format),
     SetControl(model::control::Control),
 }
@@ -59,6 +64,7 @@ pub enum Response {
     StopStream(io::Result<()>),
     QueryFormats(io::Result<Vec<model::format::Format>>),
     QueryControls(io::Result<Vec<model::control::Control>>),
+    GetFormat(io::Result<model::format::Format>),
     SetFormat(io::Result<model::format::Format>),
     SetControl(io::Result<model::control::Control>),
 }
