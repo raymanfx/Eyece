@@ -137,18 +137,16 @@ where
                         let connection = Connection::new(tx);
 
                         // open the device
-                        let res = Dev::with_uri(&uri);
-                        if res.is_err() {
-                            return Some((Event::Error(res.err().unwrap()), State::Finished));
-                        }
-                        let mut device = res.unwrap();
+                        let mut device = match Dev::with_uri(&uri) {
+                            Ok(device) => device,
+                            Err(e) => return Some((Event::Error(e), State::Finished)),
+                        };
 
                         // read the current format
-                        let res = device.format();
-                        if res.is_err() {
-                            return Some((Event::Error(res.err().unwrap()), State::Finished));
-                        }
-                        let mut format = res.unwrap();
+                        let mut format = match device.format() {
+                            Ok(format) => format,
+                            Err(e) => return Some((Event::Error(e), State::Finished)),
+                        };
 
                         // Iced only supports BGRA images, so request that exact format.
                         // Eye-rs will transparently convert the images on-the-fly if necessary
@@ -156,11 +154,10 @@ where
                         format.pixfmt = PixelFormat::Bgra(32);
 
                         // set the new format
-                        let res = device.set_format(&format);
-                        if res.is_err() {
-                            return Some((Event::Error(res.err().unwrap()), State::Finished));
-                        }
-                        let format = res.unwrap();
+                        let format = match device.set_format(&format) {
+                            Ok(format) => format,
+                            Err(e) => return Some((Event::Error(e), State::Finished)),
+                        };
 
                         if format.pixfmt != PixelFormat::Bgra(32) {
                             let err = io::Error::new(
