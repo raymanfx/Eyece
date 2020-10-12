@@ -127,6 +127,7 @@ impl Application for Eyece {
             Message::ConnectionEvent(event) => match event {
                 eye::subscription::Event::Error(err) => {
                     self.config.device = None;
+                    self.controls = Controls::default();
                     self.log.update(LogMessage::Log(
                         model::log::Level::Warn,
                         format!("Event::Error: {}", err),
