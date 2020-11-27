@@ -1,10 +1,7 @@
 use std::{io, sync::mpsc};
 
-use eye::device::Device as Dev;
-use eye::hal::traits::{Device, Stream};
 use eye::prelude::*;
-
-use ffimage::packed::dynamic::ImageView;
+use eye::traits::{Device, ImageStream};
 
 use iced_futures::futures;
 
@@ -137,7 +134,7 @@ where
                         let connection = Connection::new(tx);
 
                         // open the device
-                        let mut device = match Dev::with_uri(&uri) {
+                        let mut device = match Context::open_device(&uri) {
                             Ok(device) => device,
                             Err(e) => return Some((Event::Error(e), State::Finished)),
                         };
@@ -205,6 +202,7 @@ where
                             }
                             Request::QueryFormats
                             | Request::QueryControls
+                            | Request::GetFormat
                             | Request::SetFormat(..)
                             | Request::SetControl(..) => {
                                 let event = match Self::handle_request(&mut *device, request) {
@@ -275,11 +273,11 @@ where
                                         }
                                     }
                                 }
-                                Request::SetControl(ctrl) => {
-                                    let event = match Self::handle_request(
-                                        &mut *device,
-                                        Request::SetControl(ctrl),
-                                    ) {
+                                Request::QueryFormats
+                                | Request::QueryControls
+                                | Request::GetFormat
+                                | Request::SetControl(..) => {
+                                    let event = match Self::handle_request(&mut *device, req) {
                                         Some(res) => Event::Response(res),
                                         None => Event::Error(io::Error::new(
                                             io::ErrorKind::InvalidInput,
@@ -314,23 +312,32 @@ where
                         }
 
                         match stream.next() {
-                            Ok(frame) => {
-                                let pixels = frame.raw().as_slice().unwrap().to_vec();
-                                let handle = iced::image::Handle::from_pixels(
-                                    frame.width(),
-                                    frame.height(),
-                                    pixels,
-                                );
-                                Some((
-                                    Event::Stream(handle),
-                                    State::Streaming {
-                                        device,
-                                        stream,
-                                        comm,
-                                    },
-                                ))
-                            }
-                            Err(e) => Some((Event::Error(e), State::Idle { comm, device })),
+                            Some(res) => match res {
+                                Ok(frame) => {
+                                    let pixels = frame.as_bytes().to_vec();
+                                    let handle = iced::image::Handle::from_pixels(
+                                        frame.width(),
+                                        frame.height(),
+                                        pixels,
+                                    );
+                                    Some((
+                                        Event::Stream(handle),
+                                        State::Streaming {
+                                            device,
+                                            stream,
+                                            comm,
+                                        },
+                                    ))
+                                }
+                                Err(e) => Some((Event::Error(e), State::Idle { comm, device })),
+                            },
+                            None => Some((
+                                Event::Error(io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "stream died",
+                                )),
+                                State::Idle { comm, device },
+                            )),
                         }
                     }
                     State::Finished => {
@@ -361,7 +368,7 @@ enum State<'a> {
     Streaming {
         comm: mpsc::Receiver<Request>,
         device: SendWrapper<Box<dyn Device>>,
-        stream: SendWrapper<Box<dyn 'a + for<'b> Stream<'b, Item = ImageView<'b>>>>,
+        stream: SendWrapper<Box<ImageStream<'a>>>,
     },
     Finished,
 }

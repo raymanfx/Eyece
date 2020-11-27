@@ -26,7 +26,6 @@ struct Eyece {
 
 #[derive(Debug)]
 enum Message {
-    EnumDevices,
     DeviceSelected(model::device::Device),
     FormatSelected(model::format::Format),
     ControlChanged(model::control::Control),
@@ -42,18 +41,10 @@ impl Application for Eyece {
     type Flags = ();
 
     fn new(_flags: ()) -> (Self, Command<Message>) {
-        // Perform initial device enumeration.
-        // TODO: Async?
-        let devices: Vec<model::device::Device> = eye::Device::enumerate()
-            .iter()
-            .map(|dev| model::device::Device::from(dev.as_str()))
-            .collect();
-
         let mut eyece = Eyece {
             ..Default::default()
         };
 
-        eyece.config.devices = devices;
         eyece.log.level = model::log::Level::Warn;
 
         (eyece, Command::none())
@@ -73,19 +64,6 @@ impl Application for Eyece {
 
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::EnumDevices => {
-                self.config.devices = eye::Device::enumerate()
-                    .iter()
-                    .map(|dev| model::device::Device::from(dev.as_str()))
-                    .collect();
-                self.log.update(LogMessage::Log(
-                    model::log::Level::Info,
-                    format!(
-                        "Message::EnumDevices: Found {} devices",
-                        self.config.devices.len()
-                    ),
-                ));
-            }
             Message::DeviceSelected(dev) => {
                 self.config.device = Some(dev);
             }
@@ -137,6 +115,7 @@ impl Application for Eyece {
                     connection.query_formats();
                     connection.query_controls();
                     connection.start_stream();
+                    connection.format();
                     self.connection = Some(connection);
                 }
                 eye::subscription::Event::Disconnected => {
@@ -267,7 +246,7 @@ impl Application for Eyece {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 struct Config {
     devices: Vec<model::device::Device>,
     device: Option<model::device::Device>,
@@ -289,7 +268,19 @@ enum ConfigMessage {
 impl Config {
     fn update(&mut self, message: ConfigMessage) -> Vec<Message> {
         match message {
-            ConfigMessage::EnumDevices => vec![Message::EnumDevices],
+            ConfigMessage::EnumDevices => {
+                self.devices = eye::Context::enumerate_devices()
+                    .iter()
+                    .map(|dev| model::device::Device::from(dev.as_str()))
+                    .collect();
+                vec![Message::LogMessage(LogMessage::Log(
+                    model::log::Level::Info,
+                    format!(
+                        "ConfigMessage::EnumDevices: Found {} devices",
+                        self.devices.len()
+                    ),
+                ))]
+            }
             ConfigMessage::DeviceSelected(dev) => vec![
                 Message::LogMessage(LogMessage::Log(
                     model::log::Level::Info,
