@@ -7,5 +7,5 @@ edition = "2018"
 [dependencies]
 eye = { git = "https://github.com/raymanfx/eye-rs", features = ["hal-openpnp"], rev = "99ac5d79" }
 ffimage = "0.8.1"
-iced = { git = "https://github.com/hecrj/iced", features = ["image", "tokio"], rev = "bbc6e91" }
-iced_futures = { git = "https://github.com/hecrj/iced", rev = "bbc6e91" }
+iced = { version = "0.2", features = ["image"] }
+iced_futures = "0.2"

@@ -10,7 +10,7 @@ use iced::{
     Text,
 };
 
-fn main() {
+fn main() -> iced::Result {
     Eyece::run(Settings::default())
 }
 
