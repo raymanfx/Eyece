@@ -223,25 +223,32 @@ impl Application for Eyece {
 
     fn view(&mut self) -> Element<Message> {
         // Uniform padding and spacing for all elements.
-        const SPACING: u16 = 10;
         const PADDING: u16 = 10;
+        const SPACING: u16 = 10;
 
-        let mut image = Row::new();
+        // Config panel
+        let config = self.config.view().map(|msg| Message::ConfigMessage(msg));
+
+        // Live preview
+        let mut viewer = Row::new();
         if let Some(handle) = &self.image {
-            image = image.push(Image::new(handle.clone()));
+            viewer = viewer.push(Image::new(handle.clone()));
         }
+
+        // Device control panel
+        let controls = self
+            .controls
+            .view()
+            .map(|msg| Message::ControlsMessage(msg));
+
+        // Logs
+        let log = self.log.view().map(|msg| Message::LogMessage(msg));
 
         Column::new()
             .padding(PADDING)
-            .push(self.config.view().map(|msg| Message::ConfigMessage(msg)))
-            .push(
-                Row::new().spacing(SPACING).push(image).push(
-                    self.controls
-                        .view()
-                        .map(|msg| Message::ControlsMessage(msg)),
-                ),
-            )
-            .push(self.log.view().map(|msg| Message::LogMessage(msg)))
+            .push(config)
+            .push(Row::new().spacing(SPACING).push(viewer).push(controls))
+            .push(log)
             .into()
     }
 }
@@ -303,28 +310,34 @@ impl Config {
 
     fn view(&mut self) -> Element<ConfigMessage> {
         // Uniform padding and spacing for all elements.
+        const SPACING: u16 = 10;
         const PADDING: u16 = 10;
 
-        // Device selection, format configuration, etc.
-        Row::new()
-            .padding(PADDING)
-            .push(
-                Button::new(&mut self.device_list_refresh, Text::new("Refresh"))
-                    .on_press(ConfigMessage::EnumDevices),
-            )
-            .push(PickList::new(
+        let mut container = Row::new().spacing(SPACING).push(
+            Button::new(&mut self.device_list_refresh, Text::new("Refresh"))
+                .on_press(ConfigMessage::EnumDevices),
+        );
+        if !self.devices.is_empty() {
+            // Device selection
+            container = container.push(PickList::new(
                 &mut self.device_list,
                 &self.devices,
                 self.device.clone(),
                 ConfigMessage::DeviceSelected,
-            ))
-            .push(PickList::new(
-                &mut self.format_list,
-                &self.formats,
-                self.format.clone(),
-                ConfigMessage::FormatSelected,
-            ))
-            .into()
+            ));
+
+            if !self.formats.is_empty() {
+                // Format selection
+                container = container.push(PickList::new(
+                    &mut self.format_list,
+                    &self.formats,
+                    self.format.clone(),
+                    ConfigMessage::FormatSelected,
+                ));
+            }
+        }
+
+        Column::new().padding(PADDING).push(container).into()
     }
 }
 
